@@ -1,0 +1,273 @@
+#!/bin/bash
+# Dialog-based menu for common operations
+# This script provides an easy-to-use interface for common system operations
+
+# Function to execute a command with automatic responses
+run_command() {
+    clear
+    echo "Executing: $1"
+    /home/whipc/autoexpect.exp "$1"
+    echo "Command completed. Press Enter to continue..."
+    read
+}
+
+# Main menu function
+show_main_menu() {
+    while true; do
+        cmd=$(dialog --clear --backtitle "Easy System Management" \
+            --title "Main Menu" \
+            --menu "Select an operation:" 15 60 8 \
+            1 "System Update" \
+            2 "Install Software" \
+            3 "System Services" \
+            4 "Network Management" \
+            5 "File Operations" \
+            6 "SSH Connections" \
+            0 "Exit" \
+            2>&1 >/dev/tty)
+        
+        clear
+        case $cmd in
+            1) show_update_menu ;;
+            2) show_install_menu ;;
+            3) show_services_menu ;;
+            4) show_network_menu ;;
+            5) show_file_menu ;;
+            6) show_ssh_menu ;;
+            0) exit 0 ;;
+            *) echo "Invalid option" ;;
+        esac
+    done
+}
+
+# Update menu
+show_update_menu() {
+    cmd=$(dialog --clear --backtitle "System Update" \
+        --title "Update Options" \
+        --menu "Select an operation:" 15 60 4 \
+        1 "Update package lists" \
+        2 "Upgrade all packages" \
+        3 "Dist-upgrade" \
+        4 "Autoremove unused packages" \
+        0 "Back to main menu" \
+        2>&1 >/dev/tty)
+    
+    case $cmd in
+        1) run_command "sudo apt-get update" ;;
+        2) run_command "sudo apt-get upgrade -y" ;;
+        3) run_command "sudo apt-get dist-upgrade -y" ;;
+        4) run_command "sudo apt-get autoremove -y" ;;
+        0) return ;;
+        *) echo "Invalid option" ;;
+    esac
+}
+
+# Install menu
+show_install_menu() {
+    package=$(dialog --clear --backtitle "Software Installation" \
+        --title "Install Software" \
+        --inputbox "Enter package name to install:" 8 60 \
+        2>&1 >/dev/tty)
+    
+    if [ -n "$package" ]; then
+        run_command "sudo apt-get install -y $package"
+    fi
+}
+
+# Services menu
+show_services_menu() {
+    cmd=$(dialog --clear --backtitle "System Services" \
+        --title "Service Management" \
+        --menu "Select an operation:" 15 60 4 \
+        1 "Start a service" \
+        2 "Stop a service" \
+        3 "Restart a service" \
+        4 "Check service status" \
+        0 "Back to main menu" \
+        2>&1 >/dev/tty)
+    
+    case $cmd in
+        1|2|3|4)
+            service=$(dialog --clear --backtitle "Service Management" \
+                --title "Service Name" \
+                --inputbox "Enter service name:" 8 60 \
+                2>&1 >/dev/tty)
+            
+            if [ -n "$service" ]; then
+                case $cmd in
+                    1) run_command "sudo systemctl start $service" ;;
+                    2) run_command "sudo systemctl stop $service" ;;
+                    3) run_command "sudo systemctl restart $service" ;;
+                    4) run_command "sudo systemctl status $service" ;;
+                esac
+            fi
+            ;;
+        0) return ;;
+        *) echo "Invalid option" ;;
+    esac
+}
+
+# Network menu
+show_network_menu() {
+    cmd=$(dialog --clear --backtitle "Network Management" \
+        --title "Network Options" \
+        --menu "Select an operation:" 15 60 5 \
+        1 "Show network interfaces" \
+        2 "Show IP addresses" \
+        3 "Check connectivity (ping)" \
+        4 "Show network routes" \
+        5 "Show open ports" \
+        0 "Back to main menu" \
+        2>&1 >/dev/tty)
+    
+    case $cmd in
+        1) run_command "ip addr" ;;
+        2) run_command "hostname -I" ;;
+        3) 
+            host=$(dialog --clear --backtitle "Network Management" \
+                --title "Ping Host" \
+                --inputbox "Enter hostname or IP to ping:" 8 60 "google.com" \
+                2>&1 >/dev/tty)
+            if [ -n "$host" ]; then
+                run_command "ping -c 4 $host"
+            fi
+            ;;
+        4) run_command "ip route" ;;
+        5) run_command "sudo ss -tuln" ;;
+        0) return ;;
+        *) echo "Invalid option" ;;
+    esac
+}
+
+# File operations menu
+show_file_menu() {
+    cmd=$(dialog --clear --backtitle "File Operations" \
+        --title "File Options" \
+        --menu "Select an operation:" 15 60 5 \
+        1 "List files in directory" \
+        2 "Create a directory" \
+        3 "Remove a file/directory" \
+        4 "Change file permissions" \
+        5 "Change file ownership" \
+        0 "Back to main menu" \
+        2>&1 >/dev/tty)
+    
+    case $cmd in
+        1)
+            dir=$(dialog --clear --backtitle "File Operations" \
+                --title "List Directory" \
+                --inputbox "Enter directory path:" 8 60 "$HOME" \
+                2>&1 >/dev/tty)
+            if [ -n "$dir" ]; then
+                run_command "ls -la $dir"
+            fi
+            ;;
+        2)
+            dir=$(dialog --clear --backtitle "File Operations" \
+                --title "Create Directory" \
+                --inputbox "Enter directory path to create:" 8 60 \
+                2>&1 >/dev/tty)
+            if [ -n "$dir" ]; then
+                run_command "mkdir -p $dir"
+            fi
+            ;;
+        3)
+            file=$(dialog --clear --backtitle "File Operations" \
+                --title "Remove File/Directory" \
+                --inputbox "Enter file/directory to remove:" 8 60 \
+                2>&1 >/dev/tty)
+            if [ -n "$file" ]; then
+                run_command "rm -ri $file"
+            fi
+            ;;
+        4)
+            file=$(dialog --clear --backtitle "File Operations" \
+                --title "Change Permissions" \
+                --inputbox "Enter file/directory path:" 8 60 \
+                2>&1 >/dev/tty)
+            if [ -n "$file" ]; then
+                perm=$(dialog --clear --backtitle "File Operations" \
+                    --title "Set Permissions" \
+                    --inputbox "Enter permissions (e.g., 755):" 8 60 "755" \
+                    2>&1 >/dev/tty)
+                if [ -n "$perm" ]; then
+                    run_command "chmod -R $perm $file"
+                fi
+            fi
+            ;;
+        5)
+            file=$(dialog --clear --backtitle "File Operations" \
+                --title "Change Ownership" \
+                --inputbox "Enter file/directory path:" 8 60 \
+                2>&1 >/dev/tty)
+            if [ -n "$file" ]; then
+                owner=$(dialog --clear --backtitle "File Operations" \
+                    --title "Set Owner" \
+                    --inputbox "Enter owner:group:" 8 60 "$(whoami):$(whoami)" \
+                    2>&1 >/dev/tty)
+                if [ -n "$owner" ]; then
+                    run_command "sudo chown -R $owner $file"
+                fi
+            fi
+            ;;
+        0) return ;;
+        *) echo "Invalid option" ;;
+    esac
+}
+
+# SSH menu
+show_ssh_menu() {
+    cmd=$(dialog --clear --backtitle "SSH Connections" \
+        --title "SSH Options" \
+        --menu "Select an operation:" 15 60 3 \
+        1 "Connect to SSH server" \
+        2 "Generate SSH key" \
+        3 "Copy SSH key to server" \
+        0 "Back to main menu" \
+        2>&1 >/dev/tty)
+    
+    case $cmd in
+        1)
+            host=$(dialog --clear --backtitle "SSH Connections" \
+                --title "SSH Connection" \
+                --inputbox "Enter hostname or IP:" 8 60 \
+                2>&1 >/dev/tty)
+            if [ -n "$host" ]; then
+                user=$(dialog --clear --backtitle "SSH Connections" \
+                    --title "SSH Connection" \
+                    --inputbox "Enter username:" 8 60 "$(whoami)" \
+                    2>&1 >/dev/tty)
+                if [ -n "$user" ]; then
+                    clear
+                    echo "Connecting to $user@$host..."
+                    /home/whipc/auto-ssh.exp "$user" "$host" ""
+                    echo "SSH session ended. Press Enter to continue..."
+                    read
+                fi
+            fi
+            ;;
+        2)
+            run_command "ssh-keygen -t rsa -b 4096"
+            ;;
+        3)
+            host=$(dialog --clear --backtitle "SSH Connections" \
+                --title "SSH Key Copy" \
+                --inputbox "Enter hostname or IP:" 8 60 \
+                2>&1 >/dev/tty)
+            if [ -n "$host" ]; then
+                user=$(dialog --clear --backtitle "SSH Connections" \
+                    --title "SSH Key Copy" \
+                    --inputbox "Enter username:" 8 60 "$(whoami)" \
+                    2>&1 >/dev/tty)
+                if [ -n "$user" ]; then
+                    run_command "ssh-copy-id $user@$host"
+                fi
+            fi
+            ;;
+        0) return ;;
+        *) echo "Invalid option" ;;
+    esac
+}
+
+# Start the main menu
+show_main_menu 

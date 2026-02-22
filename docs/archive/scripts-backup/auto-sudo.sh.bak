@@ -1,0 +1,12 @@
+#!/bin/bash
+# Auto-sudo script that handles password automatically
+# Usage: ./auto-sudo.sh command [args]
+
+# First check if we can use sudo without password (thanks to our NOPASSWD config)
+if sudo -n true 2>/dev/null; then
+    # We can use sudo without password
+    sudo "$@"
+else
+    # Use expect to handle password prompt
+    /home/whipc/autoexpect.exp "sudo $*"
+fi 

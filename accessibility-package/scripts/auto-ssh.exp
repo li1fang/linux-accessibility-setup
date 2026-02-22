@@ -1,0 +1,45 @@
+#!/usr/bin/expect -f
+# Automated SSH connection with password handling
+# Usage: ./auto-ssh.exp username hostname [password]
+
+set timeout 30
+set username [lindex $argv 0]
+set hostname [lindex $argv 1]
+set password [lindex $argv 2]
+
+if {[llength $argv] < 2} {
+    send_user "Usage: $argv0 username hostname \[password\]\n"
+    exit 1
+}
+
+spawn ssh $username@$hostname
+
+expect {
+    -re "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+    -re "password:" {
+        if {$password != ""} {
+            send "$password\r"
+        } else {
+            send "\r"
+        }
+        exp_continue
+    }
+    -re "Permission denied" {
+        send_user "Error: Permission denied\n"
+        exit 1
+    }
+    -re "\\\$|>" {
+        # Successfully logged in
+        send_user "Successfully connected to $hostname\n"
+    }
+    timeout {
+        send_user "Error: Connection timed out\n"
+        exit 1
+    }
+}
+
+# Pass control to the user
+interact 

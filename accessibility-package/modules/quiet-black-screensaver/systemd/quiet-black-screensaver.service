@@ -1,0 +1,15 @@
+[Unit]
+Description=Quiet Black Screensaver (pure black, no lock, keep HDMI signal)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+# qbsctl will generate a concrete user unit with QBS_CONFIG_FILE path.
+ExecStart=%h/.local/bin/quiet-black-screensaver-daemon.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

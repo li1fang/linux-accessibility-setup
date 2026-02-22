@@ -1,0 +1,340 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SERVICE_NAME="quiet-black-screensaver.service"
+QBS_HOME="${HOME}/.local/share/quiet-black-screensaver"
+QBS_BIN_DIR="${HOME}/.local/bin"
+QBS_SYSTEMD_DIR="${HOME}/.config/systemd/user"
+QBS_CONFIG_DIR="${HOME}/.config/quiet-black-screensaver"
+QBS_STATE_DIR="${HOME}/.local/state"
+QBS_CONFIG_FILE="${QBS_CONFIG_DIR}/config.env"
+QBS_LOG_FILE="${QBS_STATE_DIR}/quiet-black-screensaver.log"
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+MODULE_ROOT="${MODULE_ROOT:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
+
+say() { printf '%s\n' "$*"; }
+warn() { printf 'WARN: %s\n' "$*" >&2; }
+err() { printf 'ERROR: %s\n' "$*" >&2; }
+json_escape() {
+  local s="${1:-}"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "${s}"
+}
+
+read_cfg() {
+  local file="$1" group="$2" key="$3"
+  kreadconfig6 --file "${file}" --group "${group}" --key "${key}" 2>/dev/null || true
+}
+
+get_pm_idle() {
+  local profile="$1" subsection="$2"
+  local pm="${HOME}/.config/powermanagementprofilesrc"
+  [[ -f "${pm}" ]] || { echo ""; return 0; }
+  awk -v p="${profile}" -v s="${subsection}" '
+    BEGIN { in_target=0 }
+    /^\[/ {
+      in_target=($0=="[" p "][" s "]")
+      next
+    }
+    in_target && /^idleTime=/ {
+      sub(/^idleTime=/,"",$0)
+      print $0
+      exit
+    }
+  ' "${pm}"
+}
+
+require_user_systemd() {
+  if ! systemctl --user show-environment >/dev/null 2>&1; then
+    err "无法访问 user systemd 会话。请在图形登录会话里运行。"
+    exit 2
+  fi
+}
+
+install_module() {
+  mkdir -p "${QBS_HOME}" "${QBS_BIN_DIR}" "${QBS_SYSTEMD_DIR}" "${QBS_CONFIG_DIR}" "${QBS_STATE_DIR}"
+
+  install -m 0755 "${MODULE_ROOT}/bin/quiet-black-screen.py" "${QBS_BIN_DIR}/quiet-black-screen.py"
+  install -m 0755 "${MODULE_ROOT}/bin/quiet-black-screensaver-daemon.py" "${QBS_BIN_DIR}/quiet-black-screensaver-daemon.py"
+
+  if [[ ! -f "${QBS_CONFIG_FILE}" ]]; then
+    install -m 0644 "${MODULE_ROOT}/config/default.env" "${QBS_CONFIG_FILE}"
+    say "已创建配置: ${QBS_CONFIG_FILE}"
+  fi
+
+  cat > "${QBS_SYSTEMD_DIR}/${SERVICE_NAME}" <<UNIT
+[Unit]
+Description=Quiet Black Screensaver (pure black, no lock, keep HDMI signal)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+Environment=QBS_CONFIG_FILE=${QBS_CONFIG_FILE}
+ExecStart=${QBS_BIN_DIR}/quiet-black-screensaver-daemon.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
+UNIT
+
+  systemctl --user daemon-reload
+  say "安装完成。"
+}
+
+fix_screen_lock() {
+  kwriteconfig6 --file kscreenlockerrc --group Daemon --key Autolock false
+  kwriteconfig6 --file kscreenlockerrc --group Daemon --key Timeout 0
+  kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnResume false
+  kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnWake false
+  kwriteconfig6 --file kscreenlockerrc --group Daemon --key LockOnSuspend false
+  say "已修复锁屏策略（Autolock=false, Timeout=0）"
+}
+
+fix_power_policy() {
+  local pm="${HOME}/.config/powermanagementprofilesrc"
+  if [[ ! -f "${pm}" ]]; then
+    warn "未找到 ${pm}，跳过电源策略修复"
+    return 0
+  fi
+  cp -a "${pm}" "${pm}.bak.$(date +%Y%m%d-%H%M%S)"
+  awk '
+    BEGIN { sec=""; subsec="" }
+    /^\[/ {
+      sec=""; subsec="";
+      if ($0 ~ /^\[(AC|Battery|LowBattery)\]$/) {
+        sec=substr($0,2,length($0)-2);
+      } else if ($0 ~ /^\[(AC|Battery|LowBattery)\]\[(DPMSControl|SuspendSession|DimDisplay)\]$/) {
+        line=$0; gsub(/^\[/,"",line); gsub(/\]$/,"",line);
+        gsub(/\]\[/,":",line);
+        split(line,a,":");
+        sec=a[1]; subsec=a[2];
+      }
+      print; next
+    }
+    {
+      if (sec != "" && subsec != "" && $0 ~ /^idleTime=/) {
+        print "idleTime=0"; next
+      }
+      print
+    }
+  ' "${pm}" > "${pm}.tmp"
+  mv "${pm}.tmp" "${pm}"
+  systemctl --user restart plasma-powerdevil.service >/dev/null 2>&1 || true
+  say "已修复电源策略（DPMS/Dim/Suspend idleTime=0）"
+}
+
+enable_module() {
+  local arg="${1:-}"
+  require_user_systemd
+  if [[ "${arg}" == "--fix" ]]; then
+    fix_screen_lock
+    fix_power_policy
+  fi
+  systemctl --user enable --now "${SERVICE_NAME}"
+  say "已启用并启动 ${SERVICE_NAME}"
+}
+
+disable_module() {
+  require_user_systemd
+  systemctl --user disable --now "${SERVICE_NAME}" || true
+  say "已停止并禁用 ${SERVICE_NAME}"
+}
+
+restart_module() {
+  require_user_systemd
+  systemctl --user restart "${SERVICE_NAME}"
+  say "已重启 ${SERVICE_NAME}"
+}
+
+status_module() {
+  require_user_systemd
+  systemctl --user status "${SERVICE_NAME}" --no-pager
+}
+
+logs_module() {
+  if [[ -f "${QBS_LOG_FILE}" ]]; then
+    tail -n 200 "${QBS_LOG_FILE}"
+  else
+    warn "日志文件不存在: ${QBS_LOG_FILE}"
+  fi
+}
+
+doctor_collect() {
+  local config_exists enabled active
+  local auto_lock timeout lock_resume
+  local ac_dpms ac_suspend ac_dim
+  local log_has_trigger=0
+  local rc=0
+
+  [[ -f "${QBS_CONFIG_FILE}" ]] && config_exists=1 || config_exists=0
+  systemctl --user is-enabled "${SERVICE_NAME}" >/dev/null 2>&1 && enabled=1 || enabled=0
+  systemctl --user is-active "${SERVICE_NAME}" >/dev/null 2>&1 && active=1 || active=0
+
+  auto_lock="$(read_cfg kscreenlockerrc Daemon Autolock)"
+  timeout="$(read_cfg kscreenlockerrc Daemon Timeout)"
+  lock_resume="$(read_cfg kscreenlockerrc Daemon LockOnResume)"
+
+  ac_dpms="$(get_pm_idle AC DPMSControl)"
+  ac_suspend="$(get_pm_idle AC SuspendSession)"
+  ac_dim="$(get_pm_idle AC DimDisplay)"
+
+  if [[ -f "${QBS_LOG_FILE}" ]] && rg -q "idle reached:|overlay started:" "${QBS_LOG_FILE}"; then
+    log_has_trigger=1
+  fi
+
+  if [[ "${config_exists}" -eq 0 || "${enabled}" -eq 0 || "${active}" -eq 0 ]]; then
+    rc=1
+  fi
+  if [[ "${auto_lock}" != "false" || "${timeout:-0}" != "0" ]]; then
+    rc=1
+  fi
+  if [[ -n "${ac_dpms}" && "${ac_dpms}" != "0" ]]; then rc=1; fi
+  if [[ -n "${ac_suspend}" && "${ac_suspend}" != "0" ]]; then rc=1; fi
+
+  printf '%s\n' "${rc}|${config_exists}|${enabled}|${active}|${auto_lock}|${timeout}|${lock_resume}|${ac_dpms}|${ac_suspend}|${ac_dim}|${log_has_trigger}"
+}
+
+doctor_module() {
+  local mode="${1:-text}"
+  local out rc config_exists enabled active auto_lock timeout lock_resume ac_dpms ac_suspend ac_dim log_has_trigger
+  out="$(doctor_collect)"
+  IFS='|' read -r rc config_exists enabled active auto_lock timeout lock_resume ac_dpms ac_suspend ac_dim log_has_trigger <<< "${out}"
+
+  if [[ "${mode}" == "json" ]]; then
+    cat <<JSON
+{
+  "ok": $([[ "${rc}" -eq 0 ]] && echo true || echo false),
+  "service": {
+    "name": "$(json_escape "${SERVICE_NAME}")",
+    "enabled": $([[ "${enabled}" -eq 1 ]] && echo true || echo false),
+    "active": $([[ "${active}" -eq 1 ]] && echo true || echo false)
+  },
+  "config": {
+    "path": "$(json_escape "${QBS_CONFIG_FILE}")",
+    "exists": $([[ "${config_exists}" -eq 1 ]] && echo true || echo false)
+  },
+  "screen_lock": {
+    "autolock": "$(json_escape "${auto_lock:-}")",
+    "timeout": "$(json_escape "${timeout:-}")",
+    "lock_on_resume": "$(json_escape "${lock_resume:-}")",
+    "ok": $([[ "${auto_lock}" == "false" && "${timeout:-0}" == "0" ]] && echo true || echo false)
+  },
+  "power_policy": {
+    "ac_dpms_idle_time": "$(json_escape "${ac_dpms:-}")",
+    "ac_suspend_idle_time": "$(json_escape "${ac_suspend:-}")",
+    "ac_dim_idle_time": "$(json_escape "${ac_dim:-}")",
+    "ok": $([[ "${ac_dpms:-0}" == "0" && "${ac_suspend:-0}" == "0" ]] && echo true || echo false)
+  },
+  "runtime": {
+    "log_path": "$(json_escape "${QBS_LOG_FILE}")",
+    "has_idle_trigger": $([[ "${log_has_trigger}" -eq 1 ]] && echo true || echo false)
+  }
+}
+JSON
+    return "${rc}"
+  fi
+
+  say "== QBS Doctor =="
+
+  if [[ "${config_exists}" -eq 1 ]]; then
+    say "[OK] config: ${QBS_CONFIG_FILE}"
+  else
+    warn "[MISS] config: ${QBS_CONFIG_FILE}"
+    rc=1
+  fi
+
+  if [[ "${enabled}" -eq 1 ]]; then
+    say "[OK] service enabled"
+  else
+    warn "[WARN] service not enabled"
+    rc=1
+  fi
+
+  if [[ "${active}" -eq 1 ]]; then
+    say "[OK] service active"
+  else
+    warn "[WARN] service not active"
+    rc=1
+  fi
+
+  if [[ "${auto_lock}" == "false" && "${timeout:-0}" == "0" ]]; then
+    say "[OK] screen lock: Autolock=false Timeout=0"
+  else
+    warn "[WARN] screen lock may still trigger (Autolock=${auto_lock:-unset}, Timeout=${timeout:-unset}, LockOnResume=${lock_resume:-unset})"
+    rc=1
+  fi
+
+  say "[INFO] AC power policy: DPMS=${ac_dpms:-unset} Suspend=${ac_suspend:-unset} Dim=${ac_dim:-unset}"
+  if [[ -n "${ac_dpms}" && "${ac_dpms}" != "0" ]]; then warn "[WARN] AC DPMS idleTime is not 0"; rc=1; fi
+  if [[ -n "${ac_suspend}" && "${ac_suspend}" != "0" ]]; then warn "[WARN] AC Suspend idleTime is not 0"; rc=1; fi
+
+  if [[ "${log_has_trigger}" -eq 1 ]]; then
+    say "[OK] runtime log shows idle trigger"
+  elif [[ -f "${QBS_LOG_FILE}" ]]; then
+    warn "[WARN] log has no idle/overlay trigger yet"
+  else
+    warn "[WARN] log file missing: ${QBS_LOG_FILE}"
+  fi
+
+  return "${rc}"
+}
+
+uninstall_module() {
+  local purge="${1:-}"
+  disable_module
+  rm -f "${QBS_SYSTEMD_DIR}/${SERVICE_NAME}"
+  rm -f "${QBS_BIN_DIR}/quiet-black-screen.py" "${QBS_BIN_DIR}/quiet-black-screensaver-daemon.py"
+  systemctl --user daemon-reload
+
+  if [[ "${purge}" == "--purge" ]]; then
+    rm -rf "${QBS_CONFIG_DIR}"
+    rm -f "${QBS_LOG_FILE}" "${QBS_STATE_DIR}/quiet-black-screensaver.lock"
+    say "已彻底清理（含配置和日志）。"
+  else
+    say "已卸载程序和服务（保留配置与日志）。"
+  fi
+}
+
+usage() {
+  cat <<USAGE
+Usage: qbsctl <command>
+
+Commands:
+  install        Install scripts/config/user service
+  enable [--fix] Enable and start service (with --fix to auto-fix lock/power conflicts)
+  disable        Disable and stop service
+  restart        Restart service
+  status         Show service status
+  logs           Show recent log lines
+  doctor [--json] Check conflicts and runtime state
+  uninstall      Remove service and scripts (keep config/log)
+  uninstall --purge
+USAGE
+}
+
+cmd="${1:-}"
+case "${cmd}" in
+  install) install_module ;;
+  enable) enable_module "${2:-}" ;;
+  disable) disable_module ;;
+  restart) restart_module ;;
+  status) status_module ;;
+  logs) logs_module ;;
+  doctor)
+    if [[ "${2:-}" == "--json" ]]; then
+      doctor_module json
+    else
+      doctor_module text
+    fi
+    ;;
+  uninstall) uninstall_module "${2:-}" ;;
+  *) usage; exit 2 ;;
+esac

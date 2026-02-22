@@ -1,0 +1,19 @@
+#!/usr/bin/expect -f
+# Script to handle interactive commands automatically
+# Usage: ./autoexpect.exp "command args"
+
+set timeout 20
+set cmd [lindex $argv 0]
+
+spawn {*}$cmd
+
+# Handle various prompts
+expect {
+    -re {(y/n|Y/N|\[y/N\]|\[Y/n\])} { send "y\r"; exp_continue }
+    -re {Password:} { send "\r"; exp_continue }  # Empty password or configure as needed
+    -re {Do you want to continue.*} { send "y\r"; exp_continue }
+    -re {Are you sure.*} { send "y\r"; exp_continue }
+    eof
+}
+
+exit 
